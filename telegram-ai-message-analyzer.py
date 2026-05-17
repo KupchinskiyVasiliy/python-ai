@@ -39,6 +39,8 @@ AI_API_KEY = os.environ['AI_API_KEY']
 AI_MODEL = os.environ.get('AI_MODEL', 'gpt-4o')
 AI_PROMPT = os.environ.get('AI_PROMPT', '')
 
+NOTIFY_USER = os.environ.get('NOTIFY_USER', '')  # Telegram username/phone/id to send notifications to
+
 print(f'Working for channels: {", ".join(CHANNELS)}')
 
 # ──────────────────────── Pointer helpers ────────────────────────
@@ -271,6 +273,34 @@ def analyze_channel_messages(ai_client: AIProjectClient, channel: str, formatted
         os.unlink(tmp.name)
 
 
+# ──────────────────────── Notifications ────────────────────────
+
+async def send_notifications(client: TelegramClient, results: dict[str, list[dict]]):
+    """Send a Telegram message for each found event to NOTIFY_USER."""
+    if not NOTIFY_USER:
+        print("NOTIFY_USER not set — skipping notifications.")
+        return
+
+    entity = await client.get_entity(NOTIFY_USER)
+    sent = 0
+
+    for channel, events in results.items():
+        for event in events:
+            name = event.get("event_name", "—")
+            desc = event.get("description", "—")
+            when = event.get("when_description", "—")
+            text = (
+                f"📢 *{name}*\n"
+                f"📝 {desc}\n"
+                f"🕐 {when}\n"
+                f"📌 Канал: {channel}"
+            )
+            await client.send_message(entity, text, parse_mode="md")
+            sent += 1
+
+    print(f"Sent {sent} notification(s) to '{NOTIFY_USER}'.")
+
+
 # ──────────────────────── Main ────────────────────────
 
 async def main():
@@ -279,32 +309,35 @@ async def main():
     print("=" * 60)
 
     # 1. Fetch messages from all channels
-    channel_messages: dict[str, list[str]] = {}
     async with TelegramClient(TELEGRAM_SESSION, TELEGRAM_API_ID, TELEGRAM_API_HASH) as client:
+        channel_messages: dict[str, list[str]] = {}
         for channel in CHANNELS:
             formatted = await fetch_new_messages(client, channel)
             if formatted:
                 channel_messages[channel] = formatted
 
-    if not channel_messages:
-        print("Nothing to analyze.")
-        return
+        if not channel_messages:
+            print("Nothing to analyze.")
+            return
 
-    # 2. Analyze each channel with AI (separate request per channel)
-    ai_client = build_ai_client()
-    results: dict[str, list[dict]] = {}
+        # 2. Analyze each channel with AI (separate request per channel)
+        ai_client = build_ai_client()
+        results: dict[str, list[dict]] = {}
 
-    for channel, messages in channel_messages.items():
-        print(f"\nAnalyzing channel '{channel}' ({len(messages)} messages)...")
-        events = analyze_channel_messages(ai_client, channel, messages)
-        results[channel] = events
-        print(f"  Found {len(events)} event(s)")
+        for channel, messages in channel_messages.items():
+            print(f"\nAnalyzing channel '{channel}' ({len(messages)} messages)...")
+            events = analyze_channel_messages(ai_client, channel, messages)
+            results[channel] = events
+            print(f"  Found {len(events)} event(s)")
 
-    # 3. Output combined results
-    print("\n" + "=" * 60)
-    print("Results")
-    print("=" * 60)
-    print(json.dumps(results, indent=2, ensure_ascii=False))
+        # 3. Output combined results
+        print("\n" + "=" * 60)
+        print("Results")
+        print("=" * 60)
+        print(json.dumps(results, indent=2, ensure_ascii=False))
+
+        # 4. Send notifications
+        await send_notifications(client, results)
 
 
 if __name__ == "__main__":
