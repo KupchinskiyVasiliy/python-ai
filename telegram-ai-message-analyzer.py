@@ -47,7 +47,7 @@ print(f'Working for channels: {", ".join(CHANNELS)}')
 print('Testing connectivity start')
 response = requests.get('https://google.com/', timeout=5, allow_redirects=True)
 if response.status_code == 200:
-    print(f"Success! {url} is reachable.")
+    print(f"Success! Google is reachable.")
 else:
     raise Exception(f'Test connectivity failed - {response.status_code} code')
 
