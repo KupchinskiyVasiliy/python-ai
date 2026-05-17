@@ -176,6 +176,7 @@ SYSTEM_PROMPT = """\
 - event_name: краткое название события
 - description: краткое описание
 - when_description: когда происходит событие (как указано в сообщениях)
+- source_message_id: числовой ID исходного сообщения (из заголовка [Message #ID | ...])
 Верни ТОЛЬКО валидный JSON-массив, без markdown-обёрток, без пояснений.
 Если события не найдены, верни [].
 """
@@ -241,13 +242,17 @@ async def send_notifications(client: TelegramClient, results: dict[str, list[dic
             name = event.get("event_name", "—")
             desc = event.get("description", "—")
             when = event.get("when_description", "—")
+            msg_id = event.get("source_message_id")
+            channel_clean = channel.lstrip("@")
+            source_link = f"https://t.me/{channel_clean}/{msg_id}" if msg_id else ""
             text = (
                 f"📢 *{name}*\n"
                 f"📝 {desc}\n"
                 f"🕐 {when}\n"
-                f"📌 Канал: {channel}\n"
-                f"🔗 @{channel}"
+                f"📌 Канал: @{channel_clean}"
             )
+            if source_link:
+                text += f"\n🔗 [Источник]({source_link})"
             await client.send_message(entity, text, parse_mode="md")
             sent += 1
 
