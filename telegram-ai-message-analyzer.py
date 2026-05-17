@@ -260,6 +260,25 @@ async def send_notifications(client: TelegramClient, results: dict[str, list[dic
     print(f"Sent {sent} notification(s) to '{NOTIFY_USER}'.")
 
 
+# ───────────────── AWS Lambda handler ─────────────────
+def lambda_handler(event, context):
+    """
+    Main Lambda handler function
+    Parameters:
+        event: Dict containing the Lambda function event data
+        context: Lambda runtime context
+    Returns:
+        Dict containing status message
+    """
+
+    asyncio.run(main())
+
+    return {
+        "statusCode": 200,
+        "message": "Script run successfully"
+    }
+
+
 # ──────────────────────── Main ────────────────────────
 
 async def main():
