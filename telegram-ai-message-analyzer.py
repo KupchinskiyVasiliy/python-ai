@@ -47,7 +47,7 @@ print(f'Working for channels: {", ".join(CHANNELS)}')
 
 def pointer_file(channel: str) -> str:
     """Return the pointer file path for a given channel."""
-    return f"telegram_pointer_{channel}.json"
+    return f"{TELEGRAM_POINTER_PATH}/telegram_pointer_{channel}.json"
 
 
 def load_pointer(channel: str) -> int:
