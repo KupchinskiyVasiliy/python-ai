@@ -11,6 +11,7 @@ import asyncio
 import json
 import os
 import re
+import requests
 
 from openai import OpenAI
 
@@ -42,6 +43,15 @@ AI_PROMPT = os.environ.get('AI_PROMPT', '')
 NOTIFY_USER = os.environ.get('NOTIFY_USER', '')  # Telegram username/phone/id to send notifications to
 
 print(f'Working for channels: {", ".join(CHANNELS)}')
+
+print('Testing connectivity start')
+response = requests.get('https://google.com/', timeout=5, allow_redirects=True)
+if response.status_code == 200:
+    print(f"Success! {url} is reachable.")
+else:
+    raise Exception(f'Test connectivity failed - {response.status_code} code')
+
+print('Testing connectivity end - OK')
 
 # ──────────────────────── Pointer helpers ────────────────────────
 
