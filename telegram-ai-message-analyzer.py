@@ -27,9 +27,9 @@ from telethon.tl.types import (
 
 TELEGRAM_API_ID = int(os.environ['TELEGRAM_API_ID'])
 TELEGRAM_API_HASH = os.environ['TELEGRAM_API_HASH']
-TELEGRAM_SESSION = os.environ['SESSION_PATH']
+TELEGRAM_SESSION = os.environ['TELEGRAM_SESSION_PATH']
 
-INITIAL_FETCH_LIMIT = 300
+INITIAL_FETCH_LIMIT = int(os.environ['TELEGRAM_FETCH_LIMIT'])
 
 CHANNELS = [ch.strip() for ch in os.environ['TELEGRAM_CHANNELS'].split(',') if ch.strip()]
 
