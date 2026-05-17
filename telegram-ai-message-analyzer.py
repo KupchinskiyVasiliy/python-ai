@@ -11,10 +11,8 @@ import asyncio
 import json
 import os
 import re
-import tempfile
 
-from azure.ai.projects import AIProjectClient
-from azure.core.credentials import AzureKeyCredential
+from openai import AzureOpenAI
 from telethon import TelegramClient
 from telethon.tl.types import (
     MessageMediaPoll,
@@ -172,7 +170,7 @@ async def fetch_new_messages(client: TelegramClient, channel: str) -> list[str]:
 
 SYSTEM_PROMPT = """\
 Ты — ассистент, который анализирует сообщения из Telegram-канала и извлекает предстоящие события.
-Тщательно просмотри ВСЕ прикреплённые файлы.
+Тщательно просмотри ВСЕ предоставленные сообщения.
 Для каждого найденного события верни JSON-массив объектов со следующими полями:
 - event_name: краткое название события
 - description: краткое описание
@@ -182,10 +180,11 @@ SYSTEM_PROMPT = """\
 """
 
 
-def build_ai_client() -> AIProjectClient:
-    return AIProjectClient(
-        endpoint=AI_ENDPOINT,
-        credential=AzureKeyCredential(AI_API_KEY),
+def build_ai_client() -> AzureOpenAI:
+    return AzureOpenAI(
+        azure_endpoint=AI_ENDPOINT,
+        api_key=AI_API_KEY,
+        api_version="2025-03-01-preview",
     )
 
 
@@ -200,77 +199,29 @@ def extract_json_array(text: str) -> list:
     return []
 
 
-def analyze_channel_messages(ai_client: AIProjectClient, channel: str, formatted_messages: list[str]) -> list[dict]:
-    """Upload messages as a file, create a vector store, and use an agent with
-    file_search to extract events — saves tokens by letting the model retrieve
-    only relevant chunks instead of reading the full message history."""
+def analyze_channel_messages(ai_client: AzureOpenAI, channel: str, formatted_messages: list[str]) -> list[dict]:
+    """Send messages directly to the Responses API to extract events."""
 
-    # Write messages to a temporary file
-    tmp = tempfile.NamedTemporaryFile(
-        mode="w", suffix=".txt", delete=False, prefix=f"ch_{channel}_"
+    combined = "\n\n---\n\n".join(formatted_messages)
+
+    instructions = SYSTEM_PROMPT
+    if AI_PROMPT:
+        instructions += f"\nAdditional instructions: {AI_PROMPT}"
+
+    response = ai_client.responses.create(
+        model=AI_MODEL,
+        instructions=instructions,
+        input=(
+            f"Analyze ALL messages from the Telegram channel '{channel}':\n\n"
+            f"{combined}\n\n"
+            "Extract every upcoming event and return them as a JSON array."
+        ),
     )
-    try:
-        tmp.write("\n\n---\n\n".join(formatted_messages))
-        tmp.close()
 
-        # Upload file & build vector store
-        uploaded_file = ai_client.agents.upload_file(file_path=tmp.name, purpose="assistants")
-        print(f"  Uploaded file {uploaded_file.id} ({os.path.getsize(tmp.name)} bytes)")
+    assistant_text = response.output_text
+    print(f"  AI response length: {len(assistant_text)} chars")
 
-        vector_store = ai_client.agents.create_vector_store_and_poll(
-            file_ids=[uploaded_file.id],
-            name=f"channel-{channel}",
-        )
-        print(f"  Vector store {vector_store.id} ready")
-
-        # Create agent with file_search tool
-        instructions = SYSTEM_PROMPT
-        if AI_PROMPT:
-            instructions += f"\nAdditional instructions: {AI_PROMPT}"
-
-        agent = ai_client.agents.create_agent(
-            model=AI_MODEL,
-            name=f"analyzer-{channel}",
-            instructions=instructions,
-            tools=[{"type": "file_search"}],
-            tool_resources={"file_search": {"vector_store_ids": [vector_store.id]}},
-        )
-
-        # Run conversation
-        thread = ai_client.agents.create_thread()
-        ai_client.agents.create_message(
-            thread_id=thread.id,
-            role="user",
-            content=(
-                f"Analyze ALL messages from the Telegram channel '{channel}' "
-                "in the attached file. Extract every upcoming event and return "
-                "them as a JSON array."
-            ),
-        )
-        run = ai_client.agents.create_and_process_run(
-            thread_id=thread.id, agent_id=agent.id
-        )
-
-        if run.status == "failed":
-            print(f"  ✗ AI run failed: {run.last_error}")
-            return []
-
-        # Read assistant reply
-        msgs = ai_client.agents.list_messages(thread_id=thread.id)
-        assistant_text = ""
-        for content_block in msgs.data[0].content:
-            if hasattr(content_block, "text"):
-                assistant_text += content_block.text.value
-        print(f"  AI response length: {len(assistant_text)} chars")
-
-        # Cleanup remote resources
-        ai_client.agents.delete_agent(agent.id)
-        ai_client.agents.delete_vector_store(vector_store.id)
-        ai_client.agents.delete_file(uploaded_file.id)
-
-        return extract_json_array(assistant_text)
-    finally:
-        os.unlink(tmp.name)
+    return extract_json_array(assistant_text)
 
 
 # ──────────────────────── Notifications ────────────────────────
