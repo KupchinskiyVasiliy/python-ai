@@ -259,13 +259,13 @@ def analyze_channel_messages(ai_client: AzureOpenAI, channel: str, formatted_mes
         assistant_text = response.output_text
         print(f"  AI response length: {len(assistant_text)} chars")
 
-        return extract_json_array(assistant_text)
-    finally:
-        os.unlink(tmp.name)
-
         # Cleanup remote resources
         ai_client.vector_stores.delete(vector_store.id)
         ai_client.files.delete(uploaded_file.id)
+
+        return extract_json_array(assistant_text)
+    finally:
+        os.unlink(tmp.name)
 
 
 # ──────────────────────── Notifications ────────────────────────
