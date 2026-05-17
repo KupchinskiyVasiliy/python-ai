@@ -26,29 +26,33 @@ TELEGRAM_SESSION = "telegram-ai-message-analyzer.py"
 
 INITIAL_FETCH_LIMIT = 300
 
-CHANNEL = os.environ['TELEGRAM_CHANNEL']
+CHANNELS = [ch.strip() for ch in os.environ['TELEGRAM_CHANNELS'].split(',') if ch.strip()]
 
 # ──────────────────────── Configuration ────────────────────────
 
 # Telegram MTProto credentials (get from https://my.telegram.org/apps)
 
-print(f'Working for channel {CHANNEL}')
-
-# Pointer file — stores the last processed message ID between runs
-POINTER_FILE = f"telegram_pointer_${CHANNEL}.json"
+print(f'Working for channels: {", ".join(CHANNELS)}')
 
 # ──────────────────────── Pointer helpers ────────────────────────
 
-def load_pointer() -> int:
-    """Load {channel: last_message_id} mapping."""
-    if os.path.exists(POINTER_FILE):
-        with open(POINTER_FILE, "r") as f:
+def pointer_file(channel: str) -> str:
+    """Return the pointer file path for a given channel."""
+    return f"telegram_pointer_{channel}.json"
+
+
+def load_pointer(channel: str) -> int:
+    """Load last_message_id for a channel."""
+    path = pointer_file(channel)
+    if os.path.exists(path):
+        with open(path, "r") as f:
             return json.load(f)
     return 0
 
 
-def save_pointer(pointer: int):
-    with open(POINTER_FILE, "w") as f:
+def save_pointer(channel: str, pointer: int):
+    path = pointer_file(channel)
+    with open(path, "w") as f:
         json.dump(pointer, f, indent=2)
 
 
@@ -122,14 +126,13 @@ def format_message(msg) -> str:
     return "\n".join(parts)
 
 
-async def fetch_new_messages(client: TelegramClient) -> list[str]:
+async def fetch_new_messages(client: TelegramClient, channel: str) -> list[str]:
     """Fetch new messages from the channel since last pointer."""
-    channel_key = str(CHANNEL)
-    min_id = load_pointer()
+    min_id = load_pointer(channel)
 
-    print(f"Fetching messages from '{CHANNEL}' (after message #{min_id})...")
+    print(f"Fetching messages from '{channel}' (after message #{min_id})...")
 
-    entity = await client.get_entity(CHANNEL)
+    entity = await client.get_entity(channel)
     messages = []
 
     async for msg in client.iter_messages(
@@ -148,7 +151,7 @@ async def fetch_new_messages(client: TelegramClient) -> list[str]:
 
     # Update pointer to the newest message ID
     new_max_id = messages[-1].id
-    save_pointer(new_max_id)
+    save_pointer(channel, new_max_id)
     print(f"Fetched {len(messages)} new messages. Pointer updated to #{new_max_id}.")
 
     # Format all messages
@@ -163,16 +166,21 @@ async def main():
     print("Telegram AI message Analyzer")
     print("=" * 60)
 
-    # 1. Read Telegram messages
+    # 1. Read Telegram messages from all channels
+    all_formatted: list[str] = []
     async with TelegramClient(TELEGRAM_SESSION, TELEGRAM_API_ID, TELEGRAM_API_HASH) as client:
-        formatted_messages = await fetch_new_messages(client)
+        for channel in CHANNELS:
+            formatted_messages = await fetch_new_messages(client, channel)
+            if formatted_messages:
+                all_formatted.append(f"=== Channel: {channel} ===")
+                all_formatted.extend(formatted_messages)
 
-    if not formatted_messages:
+    if not all_formatted:
         print("Nothing to analyze.")
         return
 
     # 2. Combine messages into a single text block
-    all_text = "\n\n---\n\n".join(formatted_messages)
+    all_text = "\n\n---\n\n".join(all_formatted)
     print(f"\nTotal text length: {len(all_text)} chars")
 
 
