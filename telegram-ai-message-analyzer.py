@@ -245,7 +245,8 @@ async def send_notifications(client: TelegramClient, results: dict[str, list[dic
                 f"📢 *{name}*\n"
                 f"📝 {desc}\n"
                 f"🕐 {when}\n"
-                f"📌 Канал: {channel}"
+                f"📌 Канал: {channel}\n"
+                f"🔗 @{channel}"
             )
             await client.send_message(entity, text, parse_mode="md")
             sent += 1
