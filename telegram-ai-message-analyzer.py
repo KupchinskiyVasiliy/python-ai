@@ -27,7 +27,7 @@ from telethon.tl.types import (
 
 TELEGRAM_API_ID = int(os.environ['TELEGRAM_API_ID'])
 TELEGRAM_API_HASH = os.environ['TELEGRAM_API_HASH']
-TELEGRAM_SESSION = "telegram-ai-message-analyzer.py"
+TELEGRAM_SESSION = os.environ['SESSION_PATH']
 
 INITIAL_FETCH_LIMIT = 300
 
