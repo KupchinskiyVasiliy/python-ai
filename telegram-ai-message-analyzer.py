@@ -28,6 +28,7 @@ from telethon.tl.types import (
 TELEGRAM_API_ID = int(os.environ['TELEGRAM_API_ID'])
 TELEGRAM_API_HASH = os.environ['TELEGRAM_API_HASH']
 TELEGRAM_SESSION = os.environ['TELEGRAM_SESSION_PATH']
+TELEGRAM_POINTER_PATH = os.environ['TELEGRAM_POINTER_PATH']
 
 INITIAL_FETCH_LIMIT = int(os.environ['TELEGRAM_FETCH_LIMIT'])
 
