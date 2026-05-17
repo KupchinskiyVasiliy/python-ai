@@ -1,12 +1,6 @@
-FROM python:alpine
+FROM public.ecr.aws/lambda/python
 
-RUN apk add aws-cli
+RUN pip3 install telethon==1.43.2 openai==2.33.0 --target "${LAMBDA_TASK_ROOT}"
+COPY telegram-ai-message-analyzer.py ${LAMBDA_TASK_ROOT}
 
-RUN adduser -D -h /home/python python
-USER python
-WORKDIR /home/python
-
-RUN pip3 install telethon==1.43.2 openai==2.33.0
-COPY telegram-ai-message-analyzer.sh telegram-ai-message-analyzer.py /home/python
-
-CMD sh telegram-ai-message-analyzer.sh
+CMD ["telegram-ai-message-analyzer.main"]
