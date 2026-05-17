@@ -169,14 +169,14 @@ async def fetch_new_messages(client: TelegramClient, channel: str) -> list[str]:
 # ──────────────────────── AI Analysis ────────────────────────
 
 SYSTEM_PROMPT = """\
-You are an assistant that analyzes Telegram channel messages and extracts upcoming events.
-Search through ALL the attached files thoroughly.
-For each event found, return a JSON array of objects with exactly these fields:
-- event_name: short name of the event
-- description: brief description
-- when_description: when the event happens (as described in the messages)
-Return ONLY a valid JSON array, no markdown fences, no explanation.
-If no events found, return [].
+Ты — ассистент, который анализирует сообщения из Telegram-канала и извлекает предстоящие события.
+Тщательно просмотри ВСЕ прикреплённые файлы.
+Для каждого найденного события верни JSON-массив объектов со следующими полями:
+- event_name: краткое название события
+- description: краткое описание
+- when_description: когда происходит событие (как указано в сообщениях)
+Верни ТОЛЬКО валидный JSON-массив, без markdown-обёрток, без пояснений.
+Если события не найдены, верни [].
 """
 
 
