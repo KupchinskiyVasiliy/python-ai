@@ -10,7 +10,11 @@
 import asyncio
 import json
 import os
+import re
+import tempfile
 
+from azure.ai.projects import AIProjectClient
+from azure.core.credentials import AzureKeyCredential
 from telethon import TelegramClient
 from telethon.tl.types import (
     MessageMediaPoll,
@@ -20,6 +24,8 @@ from telethon.tl.types import (
     MessageFwdHeader,
 )
 
+# ──────────────────────── Configuration ────────────────────────
+
 TELEGRAM_API_ID = int(os.environ['TELEGRAM_API_ID'])
 TELEGRAM_API_HASH = os.environ['TELEGRAM_API_HASH']
 TELEGRAM_SESSION = "telegram-ai-message-analyzer.py"
@@ -28,9 +34,10 @@ INITIAL_FETCH_LIMIT = 300
 
 CHANNELS = [ch.strip() for ch in os.environ['TELEGRAM_CHANNELS'].split(',') if ch.strip()]
 
-# ──────────────────────── Configuration ────────────────────────
-
-# Telegram MTProto credentials (get from https://my.telegram.org/apps)
+AI_ENDPOINT = os.environ['AI_ENDPOINT']
+AI_API_KEY = os.environ['AI_API_KEY']
+AI_MODEL = os.environ.get('AI_MODEL', 'gpt-4o')
+AI_PROMPT = os.environ.get('AI_PROMPT', '')
 
 print(f'Working for channels: {", ".join(CHANNELS)}')
 
@@ -159,31 +166,146 @@ async def fetch_new_messages(client: TelegramClient, channel: str) -> list[str]:
     return formatted
 
 
+# ──────────────────────── AI Analysis ────────────────────────
+
+SYSTEM_PROMPT = """\
+You are an assistant that analyzes Telegram channel messages and extracts upcoming events.
+Search through ALL the attached files thoroughly.
+For each event found, return a JSON array of objects with exactly these fields:
+- event_name: short name of the event
+- description: brief description
+- when_description: when the event happens (as described in the messages)
+Return ONLY a valid JSON array, no markdown fences, no explanation.
+If no events found, return [].
+"""
+
+
+def build_ai_client() -> AIProjectClient:
+    return AIProjectClient(
+        endpoint=AI_ENDPOINT,
+        credential=AzureKeyCredential(AI_API_KEY),
+    )
+
+
+def extract_json_array(text: str) -> list:
+    """Extract a JSON array from AI response, stripping markdown fences if present."""
+    cleaned = re.sub(r"```(?:json)?\s*", "", text).strip().rstrip("`")
+    # Find the outermost [ ... ]
+    start = cleaned.find("[")
+    end = cleaned.rfind("]")
+    if start != -1 and end != -1:
+        return json.loads(cleaned[start : end + 1])
+    return []
+
+
+def analyze_channel_messages(ai_client: AIProjectClient, channel: str, formatted_messages: list[str]) -> list[dict]:
+    """Upload messages as a file, create a vector store, and use an agent with
+    file_search to extract events — saves tokens by letting the model retrieve
+    only relevant chunks instead of reading the full message history."""
+
+    # Write messages to a temporary file
+    tmp = tempfile.NamedTemporaryFile(
+        mode="w", suffix=".txt", delete=False, prefix=f"ch_{channel}_"
+    )
+    try:
+        tmp.write("\n\n---\n\n".join(formatted_messages))
+        tmp.close()
+
+        # Upload file & build vector store
+        uploaded_file = ai_client.agents.upload_file(file_path=tmp.name, purpose="assistants")
+        print(f"  Uploaded file {uploaded_file.id} ({os.path.getsize(tmp.name)} bytes)")
+
+        vector_store = ai_client.agents.create_vector_store_and_poll(
+            file_ids=[uploaded_file.id],
+            name=f"channel-{channel}",
+        )
+        print(f"  Vector store {vector_store.id} ready")
+
+        # Create agent with file_search tool
+        instructions = SYSTEM_PROMPT
+        if AI_PROMPT:
+            instructions += f"\nAdditional instructions: {AI_PROMPT}"
+
+        agent = ai_client.agents.create_agent(
+            model=AI_MODEL,
+            name=f"analyzer-{channel}",
+            instructions=instructions,
+            tools=[{"type": "file_search"}],
+            tool_resources={"file_search": {"vector_store_ids": [vector_store.id]}},
+        )
+
+        # Run conversation
+        thread = ai_client.agents.create_thread()
+        ai_client.agents.create_message(
+            thread_id=thread.id,
+            role="user",
+            content=(
+                f"Analyze ALL messages from the Telegram channel '{channel}' "
+                "in the attached file. Extract every upcoming event and return "
+                "them as a JSON array."
+            ),
+        )
+        run = ai_client.agents.create_and_process_run(
+            thread_id=thread.id, agent_id=agent.id
+        )
+
+        if run.status == "failed":
+            print(f"  ✗ AI run failed: {run.last_error}")
+            return []
+
+        # Read assistant reply
+        msgs = ai_client.agents.list_messages(thread_id=thread.id)
+        assistant_text = ""
+        for content_block in msgs.data[0].content:
+            if hasattr(content_block, "text"):
+                assistant_text += content_block.text.value
+        print(f"  AI response length: {len(assistant_text)} chars")
+
+        # Cleanup remote resources
+        ai_client.agents.delete_agent(agent.id)
+        ai_client.agents.delete_vector_store(vector_store.id)
+        ai_client.agents.delete_file(uploaded_file.id)
+
+        return extract_json_array(assistant_text)
+    finally:
+        os.unlink(tmp.name)
+
+
 # ──────────────────────── Main ────────────────────────
 
 async def main():
     print("=" * 60)
-    print("Telegram AI message Analyzer")
+    print("Telegram AI Message Analyzer")
     print("=" * 60)
 
-    # 1. Read Telegram messages from all channels
-    all_formatted: list[str] = []
+    # 1. Fetch messages from all channels
+    channel_messages: dict[str, list[str]] = {}
     async with TelegramClient(TELEGRAM_SESSION, TELEGRAM_API_ID, TELEGRAM_API_HASH) as client:
         for channel in CHANNELS:
-            formatted_messages = await fetch_new_messages(client, channel)
-            if formatted_messages:
-                all_formatted.append(f"=== Channel: {channel} ===")
-                all_formatted.extend(formatted_messages)
+            formatted = await fetch_new_messages(client, channel)
+            if formatted:
+                channel_messages[channel] = formatted
 
-    if not all_formatted:
+    if not channel_messages:
         print("Nothing to analyze.")
         return
 
-    # 2. Combine messages into a single text block
-    all_text = "\n\n---\n\n".join(all_formatted)
-    print(f"\nTotal text length: {len(all_text)} chars")
+    # 2. Analyze each channel with AI (separate request per channel)
+    ai_client = build_ai_client()
+    results: dict[str, list[dict]] = {}
+
+    for channel, messages in channel_messages.items():
+        print(f"\nAnalyzing channel '{channel}' ({len(messages)} messages)...")
+        events = analyze_channel_messages(ai_client, channel, messages)
+        results[channel] = events
+        print(f"  Found {len(events)} event(s)")
+
+    # 3. Output combined results
+    print("\n" + "=" * 60)
+    print("Results")
+    print("=" * 60)
+    print(json.dumps(results, indent=2, ensure_ascii=False))
 
 
 if __name__ == "__main__":
     asyncio.run(main())
-
