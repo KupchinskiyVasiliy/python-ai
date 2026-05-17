@@ -11,10 +11,9 @@ import asyncio
 import json
 import os
 import re
-import tempfile
-import time
 
-from openai import AzureOpenAI
+from openai import OpenAI
+
 from telethon import TelegramClient
 from telethon.tl.types import (
     MessageMediaPoll,
@@ -172,7 +171,7 @@ async def fetch_new_messages(client: TelegramClient, channel: str) -> list[str]:
 
 SYSTEM_PROMPT = """\
 Ты — ассистент, который анализирует сообщения из Telegram-канала и извлекает предстоящие события.
-Тщательно просмотри ВСЕ прикреплённые файлы с сообщениями, используя file_search.
+Тщательно просмотри ВСЕ предоставленные сообщения.
 Для каждого найденного события верни JSON-массив объектов со следующими полями:
 - event_name: краткое название события
 - description: краткое описание
@@ -180,15 +179,6 @@ SYSTEM_PROMPT = """\
 Верни ТОЛЬКО валидный JSON-массив, без markdown-обёрток, без пояснений.
 Если события не найдены, верни [].
 """
-
-
-def build_ai_client() -> AzureOpenAI:
-    return AzureOpenAI(
-        azure_endpoint=AI_ENDPOINT,
-        api_key=AI_API_KEY,
-        api_version="2025-03-01-preview",
-    )
-
 
 def extract_json_array(text: str) -> list:
     """Extract a JSON array from AI response, stripping markdown fences if present."""
@@ -201,71 +191,38 @@ def extract_json_array(text: str) -> list:
     return []
 
 
-def analyze_channel_messages(ai_client: AzureOpenAI, channel: str, formatted_messages: list[str]) -> list[dict]:
-    """Upload messages as a file, create a vector store with file_search,
-    and use the Responses API to extract events."""
-
-    # Write messages to a temporary file
-    tmp = tempfile.NamedTemporaryFile(
-        mode="w", suffix=".txt", delete=False, prefix=f"ch_{channel}_"
+def build_ai_client() -> OpenAI:
+    return OpenAI(
+        base_url=AI_ENDPOINT,
+        api_key=AI_API_KEY
     )
-    try:
-        tmp.write("\n\n---\n\n".join(formatted_messages))
-        tmp.close()
 
-        # Upload file
-        with open(tmp.name, "rb") as f:
-            uploaded_file = ai_client.files.create(file=f, purpose="assistants")
-        print(f"  Uploaded file {uploaded_file.id} ({os.path.getsize(tmp.name)} bytes)")
 
-        # Create vector store and add the file
-        vector_store = ai_client.vector_stores.create(name=f"channel-{channel}")
-        ai_client.vector_stores.files.create(
-            vector_store_id=vector_store.id,
-            file_id=uploaded_file.id,
-        )
+def analyze_channel_messages(ai_client: OpenAI, channel: str, formatted_messages: list[str]) -> list[dict]:
+    """Send messages to Chat Completions API to extract events."""
 
-        # Poll until the vector store is ready
-        while True:
-            vs_status = ai_client.vector_stores.retrieve(vector_store.id)
-            if vs_status.status == "completed":
-                break
-            if vs_status.status == "failed":
-                print(f"  ✗ Vector store indexing failed")
-                return []
-            print(f"  Vector store status: {vs_status.status}, waiting...")
-            time.sleep(1)
-        print(f"  Vector store {vector_store.id} ready")
+    combined = "\n\n---\n\n".join(formatted_messages)
 
-        instructions = SYSTEM_PROMPT
-        if AI_PROMPT:
-            instructions += f"\nAdditional instructions: {AI_PROMPT}"
+    instructions = SYSTEM_PROMPT
+    if AI_PROMPT:
+        instructions += f"\nAdditional instructions: {AI_PROMPT}"
 
-        # Call Responses API with file_search tool
-        response = ai_client.responses.create(
-            model=AI_MODEL,
-            instructions=instructions,
-            tools=[{
-                "type": "file_search",
-                "vector_store_ids": [vector_store.id],
-            }],
-            input=(
-                f"Analyze ALL messages from the Telegram channel '{channel}' "
-                "in the attached file. Extract every upcoming event and return "
-                "them as a JSON array."
-            ),
-        )
+    response = ai_client.chat.completions.create(
+        model=AI_MODEL,
+        messages=[
+            {"role": "system", "content": instructions},
+            {"role": "user", "content": (
+                f"Analyze ALL messages from the Telegram channel '{channel}':\n\n"
+                f"{combined}\n\n"
+                "Extract every upcoming event and return them as a JSON array."
+            )},
+        ],
+    )
 
-        assistant_text = response.output_text
-        print(f"  AI response length: {len(assistant_text)} chars")
+    assistant_text = response.choices[0].message.content or ""
+    print(f"  AI response length: {len(assistant_text)} chars")
 
-        # Cleanup remote resources
-        ai_client.vector_stores.delete(vector_store.id)
-        ai_client.files.delete(uploaded_file.id)
-
-        return extract_json_array(assistant_text)
-    finally:
-        os.unlink(tmp.name)
+    return extract_json_array(assistant_text)
 
 
 # ──────────────────────── Notifications ────────────────────────
